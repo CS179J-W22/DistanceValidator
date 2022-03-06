@@ -20,8 +20,8 @@ def map_x(x_val):
     old_min = 0
     old_max = 640
 
-    new_min = 40
-    new_max = 140
+    new_min = 45
+    new_max = 135
 
     new_value = None
 
@@ -90,12 +90,20 @@ def process_data(data):
             sum += int(num)
             size += 1
 
-    print(sum/size)
+    distance = sum / size
+    
+    if distance > 1828.8:
+        print("Distanced")
+    else:
+        print("Not Distanced")
 
 def collect_data(lidar):
     try:
     #     print(lidar.info)
+        print('Analyzing room...')
+    
         distance_counter = 0
+        occupancy = 0
         distance_data = []
         for scan in lidar.iter_scans(scan_type='express', max_buf_meas=False):
             _, frame = video_capture.read()
@@ -106,9 +114,9 @@ def collect_data(lidar):
 
                 upper_body = haar_upper_body_cascade.detectMultiScale(
                     gray,
-                    scaleFactor = 1.1,
-                    minNeighbors = 2,
-                    minSize = (50, 50),
+                    scaleFactor = 1.05,
+                    minNeighbors = 4,
+                    minSize = (50, 100),
                     flags = cv2.CASCADE_SCALE_IMAGE
                 )
 
@@ -117,6 +125,8 @@ def collect_data(lidar):
 
                 for (_, angle, distance) in scan:
                     scan_data[min([359, floor(angle)])] = distance
+            
+                occupancy = len(upper_body)
 
                 if len(upper_body) >= 2:
                     first_body_x = int(upper_body[0][0])
@@ -141,10 +151,13 @@ def collect_data(lidar):
 
 #                         print(distance_data)
 
-            if distance_counter >= 10:
+            if distance_counter >= 5:
                 break
 
         process_data(distance_data)
+        print("Occupancy: " + str(occupancy))
+        
+        print()
 
         collect_data(lidar)
 
@@ -166,7 +179,10 @@ def start_program():
 
     try:
         lidar = RPLidar('/dev/ttyUSB0')
-        print('LiDAR initialized')
+        
+        print('Initialized')
+        print()
+        
         collect_data(lidar)
 
     except RPLidarException as e:
