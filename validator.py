@@ -5,9 +5,29 @@ from math import cos, sin, pi, floor, sqrt
 from rplidar import RPLidar, RPLidarException
 import matplotlib.pyplot as plt
 import numpy as np
+from pynq import DefaultIP, Overlay
+
+class LidarBoostDriver(DefaultIP):
+    def __init__(self, description):
+        super().__init__(description=description)
+
+    bindto = ['test.com:lidarBoost:lidarBoost:1.1']
+
+    def add(self, a, b):
+        self.write(0x10, a)
+        self.write(0x18, b)
+        self.write(0x30, 1)
+        return self.read(0x20)
+    
+    def multiply(self, a, b):
+        self.write(0x10, a)
+        self.write(0x18, b)
+        self.write(0x30, 0)
+        return self.read(0x20)
 
 print('Starting.')
 
+overlay = Overlay('lidarBoost.bit')
 lidar = None
 haar_upper_body_cascade = cv2.CascadeClassifier("haarcascade_upperbody.xml")
 video_capture = cv2.VideoCapture(0)
@@ -25,13 +45,16 @@ def map_x(x_val):
 
     new_value = None
 
-    old_range = (old_max - old_min)
+    old_range = overlay.lidarBoost.add(old_max, (old_min * -1))
 
     if old_range == 0:
         new_value = new_min
     else:
-        new_range = (new_max - new_min)
-        new_value = (((old_value - old_min) * new_range) / old_range) + new_min
+        new_range = overlay.lidarBoost.add(new_max, (new_min * -1))
+        
+        old_diff = overlay.lidarBoost.add(old_value, (old_min * -1))
+        
+        new_value = (overlay.lidarBoost.multiply(old_diff, new_range) / old_range) + new_min
 
     return int(new_value)
 
@@ -87,8 +110,9 @@ def process_data(data):
     size = 0
     for num in data:
         if num is not None:
-            sum += int(num)
-            size += 1
+            integer = int(num)
+            sum = overlay.lidarBoost.add(sum, integer)
+            size = overlay.lidarBoost.add(size, 1)
 
     distance = sum / size
     
@@ -147,7 +171,7 @@ def collect_data(lidar):
                         distance = get_distance(first_body_position, second_body_position)
 
                         distance_data.append(distance)
-                        distance_counter += 1
+                        distance_counter = overlay.lidarBoost.add(distance_counter, 1)
 
 #                         print(distance_data)
 
