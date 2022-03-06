@@ -71,13 +71,13 @@ def get_distance(first, second):
 def process_data(data):
     data = sorted(data)
 
-    Q1 = np.median(data[:5])
-    Q3 = np.median(data[5:])
+    Q1 = np.percentile(data, 25, interpolation = 'midpoint')
+    Q3 = np.percentile(data, 75, interpolation = 'midpoint')
 
-    interRange = Q3 - Q1
+    IQR = Q3 - Q1
 
-    max = Q3 + (1.5 * interRange)
-    min = Q1 - (1.5 * interRange)
+    max = Q3 + (1.5 * IQR)
+    min = Q1 - (1.5 * IQR)
 
     for value in data:
         if value < min or value > max:
@@ -163,7 +163,7 @@ def collect_data(lidar):
 
 def start_program():
     video_capture = cv2.VideoCapture(0)
-    
+
     try:
         lidar = RPLidar('/dev/ttyUSB0')
         print('LiDAR initialized')
@@ -171,7 +171,7 @@ def start_program():
 
     except RPLidarException as e:
         video_capture.release()
-        
+
         if lidar is not None:
             lidar.stop_motor()
             lidar.stop()
