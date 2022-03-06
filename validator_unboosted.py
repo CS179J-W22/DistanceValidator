@@ -5,6 +5,7 @@ from math import cos, sin, pi, floor, sqrt
 from rplidar import RPLidar, RPLidarException
 import matplotlib.pyplot as plt
 import numpy as np
+from pynq import DefaultIP, Overlay
 
 print('Starting.')
 
@@ -25,13 +26,15 @@ def map_x(x_val):
 
     new_value = None
 
-    old_range = (old_max - old_min)
+    old_range = old_max - old_min
 
     if old_range == 0:
         new_value = new_min
     else:
-        new_range = (new_max - new_min)
-        new_value = (((old_value - old_min) * new_range) / old_range) + new_min
+        new_range = new_max - new_min
+        old_diff = old_value - old_min
+        
+        new_value = ((old_diff * new_range) / old_range) + new_min
 
     return int(new_value)
 
@@ -87,7 +90,8 @@ def process_data(data):
     size = 0
     for num in data:
         if num is not None:
-            sum += int(num)
+            integer = int(num)
+            sum += integer
             size += 1
 
     distance = sum / size
