@@ -162,11 +162,16 @@ def collect_data(lidar):
 
 
 def start_program():
+    video_capture = cv2.VideoCapture(0)
+    
     try:
         lidar = RPLidar('/dev/ttyUSB0')
+        print('LiDAR initialized')
         collect_data(lidar)
 
     except RPLidarException as e:
+        video_capture.release()
+        
         if lidar is not None:
             lidar.stop_motor()
             lidar.stop()
