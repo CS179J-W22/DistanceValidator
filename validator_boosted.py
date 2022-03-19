@@ -6,6 +6,9 @@ from rplidar import RPLidar, RPLidarException
 import matplotlib.pyplot as plt
 import numpy as np
 from pynq import DefaultIP, Overlay
+from IPython.display import clear_output
+import ipywidgets as widgets 
+import sys
 
 class LidarBoostDriver(DefaultIP):
     def __init__(self, description):
@@ -25,12 +28,26 @@ class LidarBoostDriver(DefaultIP):
         self.write(0x30, 0)
         return self.read(0x20)
 
-print('Starting.')
-
 overlay = Overlay('lidarBoost.bit')
 lidar = None
 haar_upper_body_cascade = cv2.CascadeClassifier("haarcascade_upperbody.xml")
 video_capture = cv2.VideoCapture(0)
+print_counter = 0
+
+occupancy_out = widgets.Output()
+with occupancy_out:
+    display("loading...")
+display(occupancy_out)
+
+distance_out = widgets.Output()
+with distance_out:
+    display("loading...")
+display(distance_out)
+
+status_out = widgets.Output()
+with status_out:
+    display("loading...")
+display(status_out)
 
 scan_data = [0]*360
 
@@ -51,9 +68,7 @@ def map_x(x_val):
         new_value = new_min
     else:
         new_range = overlay.lidarBoost.add(new_max, (new_min * -1))
-        
         old_diff = overlay.lidarBoost.add(old_value, (old_min * -1))
-        
         new_value = (overlay.lidarBoost.multiply(old_diff, new_range) / old_range) + new_min
 
     return int(new_value)
@@ -61,8 +76,6 @@ def map_x(x_val):
 def get_position(scan_data, body_angle):
     for angle in range(360):
         distance = scan_data[angle]
-
-#         print(str(angle) + ", " + str(distance))
 
         if distance > 0 and body_angle == angle:
             return (distance, angle)
@@ -115,17 +128,35 @@ def process_data(data):
             size = overlay.lidarBoost.add(size, 1)
 
     distance = sum / size
+    distanced = False
     
     if distance > 1828.8:
-        print("Distanced")
+        distanced = True
     else:
-        print("Not Distanced")
+        distanced = False
+        
+    return (distanced, distance)
+
+def print_output(distanced, occupancy):
+    occupancy_out.clear_output() 
+    with occupancy_out:
+        display("Occupancy: " + str(occupancy))
+    
+    distance_out.clear_output() 
+    with distance_out:
+        display("Distance: " + str(distanced[1]))
+        
+    status_out.clear_output() 
+    with status_out:
+        if distanced[0]:
+            display("Status: " + str("Distanced"))
+        else:
+            display("Status: " + str("Not Distanced"))
+            
+    sys.stdout.flush()
 
 def collect_data(lidar):
     try:
-    #     print(lidar.info)
-        print('Analyzing room...')
-    
         distance_counter = 0
         occupancy = 0
         distance_data = []
@@ -144,9 +175,6 @@ def collect_data(lidar):
                     flags = cv2.CASCADE_SCALE_IMAGE
                 )
 
-#                 if len(upper_body) > 0:
-#                     print(upper_body)
-
                 for (_, angle, distance) in scan:
                     scan_data[min([359, floor(angle)])] = distance
             
@@ -159,13 +187,8 @@ def collect_data(lidar):
                     first_body_angle = map_x(first_body_x)
                     second_body_angle = map_x(second_body_x)
 
-#                         print(str(first_body_angle) + ", " + str(second_body_angle))
-
                     first_body_position = get_position(scan_data, first_body_angle)
                     second_body_position = get_position(scan_data, second_body_angle)
-
-#                         if first_body_position is not None and second_body_position is not None:
-#                             print(str(first_body_position) + ", " + str(second_body_position))
 
                     if first_body_position is not None and second_body_position is not None:
                         distance = get_distance(first_body_position, second_body_position)
@@ -173,16 +196,11 @@ def collect_data(lidar):
                         distance_data.append(distance)
                         distance_counter = overlay.lidarBoost.add(distance_counter, 1)
 
-#                         print(distance_data)
-
             if distance_counter >= 5:
                 break
 
-        process_data(distance_data)
-        print("Occupancy: " + str(occupancy))
-        
-        print()
-
+        distanced = process_data(distance_data)
+        print_output(distanced, occupancy)
         collect_data(lidar)
 
 
@@ -203,10 +221,6 @@ def start_program():
 
     try:
         lidar = RPLidar('/dev/ttyUSB0')
-        
-        print('Initialized')
-        print()
-        
         collect_data(lidar)
 
     except RPLidarException as e:
