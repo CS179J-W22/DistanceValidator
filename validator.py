@@ -1,14 +1,24 @@
-import os
 import cv2
 import imutils
 from math import cos, sin, pi, floor, sqrt
 from rplidar import RPLidar, RPLidarException
-import matplotlib.pyplot as plt
 import numpy as np
 from pynq import DefaultIP, Overlay
 from IPython.display import clear_output
 import ipywidgets as widgets 
 import sys
+import logging
+
+# Constants
+CAMERA_WIDTH = 640
+LIDAR_ANGLE_MIN = 45
+LIDAR_ANGLE_MAX = 135
+SOCIAL_DISTANCE_THRESHOLD_MM = 1828.8  # 6 feet in millimeters
+SCAN_SAMPLES_REQUIRED = 5
+LIDAR_SCAN_POINTS = 360
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class LidarBoostDriver(DefaultIP):
     def __init__(self, description):
@@ -29,9 +39,7 @@ class LidarBoostDriver(DefaultIP):
         return self.read(0x20)
 
 overlay = Overlay('lidarBoost.bit')
-lidar = None
 haar_upper_body_cascade = cv2.CascadeClassifier("haarcascade_upperbody.xml")
-video_capture = cv2.VideoCapture(0)
 print_counter = 0
 
 occupancy_out = widgets.Output()
@@ -49,32 +57,47 @@ with status_out:
     display("loading...")
 display(status_out)
 
-scan_data = [0]*360
+scan_data = [0] * LIDAR_SCAN_POINTS
 
 def map_x(x_val):
+    """
+    Maps x-coordinate from camera width to lidar angle range.
+    
+    Args:
+        x_val: X-coordinate value from camera (0-640)
+        
+    Returns:
+        Mapped angle value (45-135 degrees)
+    """
     old_value = x_val
-
     old_min = 0
-    old_max = 640
+    old_max = CAMERA_WIDTH
+    new_min = LIDAR_ANGLE_MIN
+    new_max = LIDAR_ANGLE_MAX
 
-    new_min = 45
-    new_max = 135
-
-    new_value = None
-
-    old_range = overlay.lidarBoost.add(old_max, (old_min * -1))
+    old_range = old_max - old_min
 
     if old_range == 0:
-        new_value = new_min
-    else:
-        new_range = overlay.lidarBoost.add(new_max, (new_min * -1))
-        old_diff = overlay.lidarBoost.add(old_value, (old_min * -1))
-        new_value = (overlay.lidarBoost.multiply(old_diff, new_range) / old_range) + new_min
+        return new_min
+    
+    new_range = new_max - new_min
+    old_diff = old_value - old_min
+    new_value = (old_diff * new_range / old_range) + new_min
 
     return int(new_value)
 
 def get_position(scan_data, body_angle):
-    for angle in range(360):
+    """
+    Gets the distance at a specific angle from lidar scan data.
+    
+    Args:
+        scan_data: Array of 360 distance measurements
+        body_angle: Angle in degrees (0-359)
+        
+    Returns:
+        Tuple of (distance, angle) or None if no valid data
+    """
+    for angle in range(LIDAR_SCAN_POINTS):
         distance = scan_data[angle]
 
         if distance > 0 and body_angle == angle:
@@ -83,6 +106,15 @@ def get_position(scan_data, body_angle):
     return None
 
 def get_cartesian(polar):
+    """
+    Converts polar coordinates to cartesian coordinates.
+    
+    Args:
+        polar: Tuple of (distance, angle_in_degrees)
+        
+    Returns:
+        Tuple of (x, y) cartesian coordinates
+    """
     distance = polar[0]
     angle = polar[1]
 
@@ -92,6 +124,16 @@ def get_cartesian(polar):
     return (x, y)
 
 def get_distance(first, second):
+    """
+    Calculates Euclidean distance between two points in polar coordinates.
+    
+    Args:
+        first: First point in polar coordinates (distance, angle)
+        second: Second point in polar coordinates (distance, angle)
+        
+    Returns:
+        Distance between the two points in millimeters
+    """
     first = get_cartesian(first)
     second = get_cartesian(second)
 
@@ -105,39 +147,55 @@ def get_distance(first, second):
     return distance
 
 def process_data(data):
+    """
+    Processes distance data by removing outliers using IQR method and calculating average.
+    
+    Args:
+        data: List of distance measurements
+        
+    Returns:
+        Tuple of (is_distanced, average_distance) where is_distanced is True if 
+        average distance exceeds social distancing threshold
+    """
+    if not data:
+        logging.warning("No data to process")
+        return (False, 0)
+    
     data = sorted(data)
 
-    Q1 = np.percentile(data, 25, interpolation = 'midpoint')
-    Q3 = np.percentile(data, 75, interpolation = 'midpoint')
+    Q1 = np.percentile(data, 25, interpolation='midpoint')
+    Q3 = np.percentile(data, 75, interpolation='midpoint')
 
     IQR = Q3 - Q1
 
-    max = Q3 + (1.5 * IQR)
-    min = Q1 - (1.5 * IQR)
+    max_threshold = Q3 + (1.5 * IQR)
+    min_threshold = Q1 - (1.5 * IQR)
 
-    for value in data:
-        if value < min or value > max:
-            value = None
-
-    sum = 0
-    size = 0
-    for num in data:
-        if num is not None:
-            integer = int(num)
-            sum = overlay.lidarBoost.add(sum, integer)
-            size = overlay.lidarBoost.add(size, 1)
-
-    distance = sum / size
-    distanced = False
+    # Properly filter outliers by creating new list
+    filtered_data = [value for value in data if min_threshold <= value <= max_threshold]
     
-    if distance > 1828.8:
-        distanced = True
-    else:
-        distanced = False
+    # Check for division by zero
+    if not filtered_data:
+        logging.warning("All values were outliers, using original data")
+        filtered_data = data
+    
+    # Use native Python arithmetic instead of FPGA
+    total_sum = sum(int(num) for num in filtered_data)
+    size = len(filtered_data)
+    
+    distance = total_sum / size
+    distanced = distance > SOCIAL_DISTANCE_THRESHOLD_MM
         
     return (distanced, distance)
 
 def print_output(distanced, occupancy):
+    """
+    Updates the output widgets with current occupancy and distance status.
+    
+    Args:
+        distanced: Tuple of (is_distanced, distance_value)
+        occupancy: Number of people detected
+    """
     occupancy_out.clear_output() 
     with occupancy_out:
         display("Occupancy: " + str(occupancy))
@@ -155,81 +213,114 @@ def print_output(distanced, occupancy):
             
     sys.stdout.flush()
 
-def collect_data(lidar):
+def collect_data(lidar, video_capture):
+    """
+    Continuously collects data from lidar and camera to monitor social distancing.
+    
+    Args:
+        lidar: RPLidar instance
+        video_capture: OpenCV VideoCapture instance
+    """
     try:
-        distance_counter = 0
-        occupancy = 0
-        distance_data = []
-        for scan in lidar.iter_scans(scan_type='express', max_buf_meas=False):
-            _, frame = video_capture.read()
-
-            if frame is not None:
-                frame = imutils.resize(frame, width=640)
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-                upper_body = haar_upper_body_cascade.detectMultiScale(
-                    gray,
-                    scaleFactor = 1.05,
-                    minNeighbors = 4,
-                    minSize = (50, 100),
-                    flags = cv2.CASCADE_SCALE_IMAGE
-                )
-
-                for (_, angle, distance) in scan:
-                    scan_data[min([359, floor(angle)])] = distance
+        # Replace recursion with iteration
+        while True:
+            distance_counter = 0
+            occupancy = 0
+            distance_data = []
             
-                occupancy = len(upper_body)
+            for scan in lidar.iter_scans(scan_type='express', max_buf_meas=False):
+                _, frame = video_capture.read()
 
-                if len(upper_body) >= 2:
-                    first_body_x = int(upper_body[0][0])
-                    second_body_x = int(upper_body[1][0])
+                if frame is not None:
+                    frame = imutils.resize(frame, width=CAMERA_WIDTH)
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-                    first_body_angle = map_x(first_body_x)
-                    second_body_angle = map_x(second_body_x)
+                    upper_body = haar_upper_body_cascade.detectMultiScale(
+                        gray,
+                        scaleFactor=1.05,
+                        minNeighbors=4,
+                        minSize=(50, 100),
+                        flags=cv2.CASCADE_SCALE_IMAGE
+                    )
 
-                    first_body_position = get_position(scan_data, first_body_angle)
-                    second_body_position = get_position(scan_data, second_body_angle)
+                    for (_, angle, distance) in scan:
+                        scan_data[min([359, floor(angle)])] = distance
+                
+                    occupancy = len(upper_body)
 
-                    if first_body_position is not None and second_body_position is not None:
-                        distance = get_distance(first_body_position, second_body_position)
+                    if len(upper_body) >= 2:
+                        first_body_x = int(upper_body[0][0])
+                        second_body_x = int(upper_body[1][0])
 
-                        distance_data.append(distance)
-                        distance_counter = overlay.lidarBoost.add(distance_counter, 1)
+                        first_body_angle = map_x(first_body_x)
+                        second_body_angle = map_x(second_body_x)
 
-            if distance_counter >= 5:
-                break
+                        first_body_position = get_position(scan_data, first_body_angle)
+                        second_body_position = get_position(scan_data, second_body_angle)
 
-        distanced = process_data(distance_data)
-        print_output(distanced, occupancy)
-        collect_data(lidar)
+                        if first_body_position is not None and second_body_position is not None:
+                            distance = get_distance(first_body_position, second_body_position)
 
+                            distance_data.append(distance)
+                            # Use native Python instead of FPGA
+                            distance_counter += 1
+
+                if distance_counter >= SCAN_SAMPLES_REQUIRED:
+                    break
+
+            distanced = process_data(distance_data)
+            print_output(distanced, occupancy)
+            # Continue loop instead of recursive call
 
     except KeyboardInterrupt:
-        print('Stopping.')
-
-        video_capture.release()
+        logging.info('Stopping.')
+    except Exception as e:
+        logging.error(f'Error in collect_data: {e}')
+    finally:
+        # Ensure cleanup happens
+        if video_capture is not None:
+            video_capture.release()
 
         if lidar is not None:
-            lidar.stop_motor()
-            lidar.stop()
-            lidar.disconnect()
-            print('Stopped.')
+            try:
+                lidar.stop_motor()
+                lidar.stop()
+                lidar.disconnect()
+                logging.info('Stopped.')
+            except Exception as e:
+                logging.error(f'Error during cleanup: {e}')
 
 
 def start_program():
-    video_capture = cv2.VideoCapture(0)
-
+    """
+    Initializes and starts the distance validation program.
+    Manages lidar and video capture resources with proper cleanup.
+    """
+    video_capture = None
+    lidar = None
+    
     try:
+        video_capture = cv2.VideoCapture(0)
         lidar = RPLidar('/dev/ttyUSB0')
-        collect_data(lidar)
+        
+        # Pass both resources to collect_data
+        collect_data(lidar, video_capture)
 
     except RPLidarException as e:
-        video_capture.release()
+        logging.error(f'RPLidar exception: {e}')
+    except Exception as e:
+        logging.error(f'Error in start_program: {e}')
+    finally:
+        # Ensure cleanup happens
+        if video_capture is not None:
+            video_capture.release()
 
         if lidar is not None:
-            lidar.stop_motor()
-            lidar.stop()
-            lidar.disconnect()
-            start_program()
+            try:
+                lidar.stop_motor()
+                lidar.stop()
+                lidar.disconnect()
+            except Exception as e:
+                logging.error(f'Error during lidar cleanup: {e}')
 
 start_program()
