@@ -20,6 +20,9 @@ LIDAR_SCAN_POINTS = 360
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Note: LidarBoostDriver class and overlay are kept for potential future use
+# but are no longer used in current arithmetic operations (native Python is faster)
+
 class LidarBoostDriver(DefaultIP):
     def __init__(self, description):
         super().__init__(description=description)
@@ -38,6 +41,7 @@ class LidarBoostDriver(DefaultIP):
         self.write(0x30, 0)
         return self.read(0x20)
 
+# Overlay initialization - kept for compatibility but not actively used
 overlay = Overlay('lidarBoost.bit')
 haar_upper_body_cascade = cv2.CascadeClassifier("haarcascade_upperbody.xml")
 print_counter = 0
@@ -222,7 +226,7 @@ def collect_data(lidar, video_capture):
         video_capture: OpenCV VideoCapture instance
     """
     try:
-        # Replace recursion with iteration
+        # Continuous processing loop for monitoring social distancing
         while True:
             distance_counter = 0
             occupancy = 0
@@ -244,7 +248,7 @@ def collect_data(lidar, video_capture):
                     )
 
                     for (_, angle, distance) in scan:
-                        scan_data[min([359, floor(angle)])] = distance
+                        scan_data[min(359, floor(angle))] = distance
                 
                     occupancy = len(upper_body)
 
